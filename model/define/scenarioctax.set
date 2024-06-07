@@ -1,0 +1,28 @@
+SSP2_2deg                     SSP2 2 degree consisten scenario
+SSP2_1p5deg                   SSP2 1 point 5 degree consisten scenario
+SSP2_Baseline                 SSP2 Baseline without climate chamge mitigation scenario 
+*SSP2_NDC                      SSP2 NDC and same efforts thereafter
+
+SSP2_1100
+SSP2_1200
+SSP2_1300
+SSP2_1400
+SSP2_1500
+SSP2_400
+SSP2_600
+SSP2_700
+SSP2_800
+SSP2_900
+
+SSP2_1000_FC
+SSP2_1100_FC
+SSP2_1200_FC
+SSP2_1300_FC
+SSP2_1400_FC
+SSP2_1500_FC
+SSP2_400_FC
+SSP2_500_FC
+SSP2_600_FC
+SSP2_700_FC
+SSP2_800_FC
+SSP2_900_FC
