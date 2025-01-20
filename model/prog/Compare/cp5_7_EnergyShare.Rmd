@@ -1,0 +1,450 @@
+---
+title: "Energy expenditure share"
+author: "Shiya Zhao"
+date: "First made: 2024/12/19 </br> Last update: `r format(Sys.Date(), '%Y/%m/%d')`"
+output: 
+  html_document:
+    theme: lumen
+    number_sections: false
+    highlight: tango
+    df_print: paged
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "~/Desktop/Model/AIMPHI/YSSP_AIMPHI/exe")
+
+require(tidyverse) 
+require(doParallel)
+require(foreach)
+require(ggpmisc)  %>%
+  suppressWarnings()
+require(ggplot2)  %>%
+  suppressWarnings()
+require(knitr)
+require(ggthemes)
+require(fitdistrplus)
+require(pscl)
+detach("package:pscl", unload = TRUE)
+getwd()
+
+```
+
+
+```{r}
+
+source(paste0(dir_ModelComparison, "/inc_prog/0_Directories.R"))
+source(paste0(dir_ModelComparison, "/inc_prog/0_PlotSettings.R"))
+source(paste0(dir_ModelComparison, "/inc_prog/igdx_GAMS_PATH.R"))
+source(paste0(dir_ModelComparison, "/inc_prog/0_Maps_global.R"))
+```
+```{r 1-population, echo=FALSE}
+df_pop <- paste0(dir_data,"/Inputdata_base.gdx")%>% rgdx.param("Population") %>% 
+  rename.vars(from = colnames(.), to = c("Ref", "R",  "Y", "Pop")) %>% 
+  filter(Y %in% c(seq(2020, 2090, 10)), Ref == "SSP2") %>% dplyr::select(-Ref) 
+
+```
+
+```{r 1-country-list, echo=FALSE}
+  df_FPL_wd <- readxl::read_excel(paste0(dir_ModelComparison, "/data/WorldBank/OGHIST.xlsx"), sheet = "Country Analytical History")
+  colnames(df_FPL_wd) <- df_FPL_wd[4,]
+  colnames(df_FPL_wd)[1] <- "R"
+  df_FPL_wd <- df_FPL_wd %>% dplyr::select(R, FY21)
+  df_FPL_wd <- df_FPL_wd[-1:-10,]
+  
+  df_FPL_wd <- df_FPL_wd %>% mutate(adjust = case_when(FY21 == "L" ~ .63, FY21 == "LM" ~ .56, FY21 == "UM" ~ .46, FY21 == "H" ~ .46)) %>% dplyr::rename(category = FY21) %>% filter(!is.na(R))
+  head(df_FPL_wd)
+```
+
+## objectives
+This document is to show the energy expenditure share of different households in different countries using decile level projections. By deriving the relationship between household income and energy expenditure, we can estimate energy poverty indicators in different countries and time using the energy expenditure share of different households in different countries.  
+
+Three energy poverty indicators are considered in this document:
+1. Low-income-high-energy-expenditure (LIHEE) rate
+2. Hidden energy poverty rate
+3. 2M indicator
+But first, we need to derive the relationship between household income and energy expenditure.
+
+```{r data}
+
+load(paste0(dir_output_YSSPpaper, "/Rdata/5_df_ExpShare.RData"))
+df_ExpShare_ene <- df_ExpShare %>% filter(I_abb == "Energy") %>% 
+  left_join(df_budget %>% dplyr::rename(budget = value)) %>% distinct()
+
+pdata <- df_ExpShare_ene %>% 
+  filter(Y %in% c(seq(2020, 2090, 10)), target == "1.5C", R== "ZAF") 
+
+p <- ggplot(pdata, aes(x = budget, y = value * 100, color = paste0(model, revenue), shape = gini)) + 
+  geom_point() + 
+  # geom_smooth(method = "lm", se = FALSE) + 
+  theme_minimal() + 
+  theme(legend.position = "right") + 
+  labs(x = "Household income", y = "Energy expenditure share") + 
+  facet_wrap(target~Y, scales = "free_y") + 
+  scale_color_viridis_d(option = "D", begin = 0.1, end = 0.9)
+p
+
+```
+
+## Fit models 
+
+```{r fit-lognorm, echo=FALSE}
+colnames(df_ExpShare_ene)
+df0 <- df_ExpShare_ene %>% 
+  filter(Y %in% c("2080", "2070", "2050", "2040", "2030", "2020")) %>% # R %in% c("CHN", "JPN", "ZAF", "IND") c(seq(2070, 2080, 10))
+  mutate(group = paste0(model, "_", R, "_", Y, "_", target, "_", revenue), 
+         # group = paste0(model, "_", R, "_", Y, "_", target, "_", revenue), 
+         budget = budget/1000) 
+# budget thousand dollors
+
+# switch function ----------------------------------------------
+sw_fun <- "log-inverse"
+# sw_fun <- "inverse"
+# sw_fun <- "exp" # fail to converge in some cases
+
+
+
+lis_group <- unique(df0$group)
+df1 <- data.frame()
+# parallel calculation
+  time3 <- Sys.time()
+  cluster <- makeCluster(10)
+  registerDoParallel(cluster)
+  df1 <- foreach(i = 1:length(lis_group),.combine=rbind, .packages = c('tidyverse', 'gdxrrw')) %dopar% {
+    MacOS <- gdata::startsWith(Sys.getenv("R_HOME"), "/")
+    if(MacOS){
+      igdx("/Library/Frameworks/GAMS.framework/Versions/44/Resources")
+      print("MacOS")
+    }else{
+      print("not MacOS")
+    }
+
+  df <- df0 %>% 
+    filter( group %in% lis_group[i])
+    if(sw_fun == "log-inverse"){
+      
+      m_reg <- nls(value~ a/(1+log(budget+1)) + b,
+               data=df,
+               start = list(a = .1, b = .05),   
+               lower = c(a = 0.001, b = .001),
+               upper = c(a = .8, b = .8),
+               algorithm = "port")  # initial values
+
+      df$fitted <- predict(m_reg)
+      df$a <- coef(m_reg)["a"] # slope
+      df$b <- coef(m_reg)["b"] # intercept
+      rss <- sum((df$value - df$fitted)^2) # Residual sum of squares
+      tss <- sum((df$value - mean(df$value))^2) # Total sum of squares
+      df$Rsqr <- 1 - rss/tss # R squared
+           
+    }else if(sw_fun == "inverse"){
+            m_reg <- nls(value~ a/(budget+1) + b,
+               data=df,
+               start = list(a = .1, b = .05),   
+               # lower = c(a = 0, b = .01),
+               # upper = c(a = .3, b = .3), 
+               algorithm = "port")  # initial values
+               
+      df$fitted <- predict(m_reg)
+      df$a <- coef(m_reg)["a"] # slope
+      df$b <- coef(m_reg)["b"] # intercept
+      rss <- sum((df$value - df$fitted)^2) # Residual sum of squares
+      tss <- sum((df$value - mean(df$value))^2) # Total sum of squares
+      df$Rsqr <- 1-rss/tss # R squared
+    
+    }else if(sw_fun == "exp"){
+      # if we use the exponential model
+      m_reg <- nls(value ~ a* exp(-k*budget ) + c,
+                 data = df,
+                 start = list(a = .1, k = 1/1000,  c = .05),   # initial values
+                 lower = c(a = 0, k = 0,  c = .01),
+                 upper = c(a = .3, k = +Inf, c = .1), 
+               algorithm = "port")  # Lower bounds for a, b, c
+      df$fitted <- predict(m_reg)
+      df$a <- coef(m_reg)["a"]
+      df$k <- coef(m_reg)["k"]
+      df$c <- coef(m_reg)["c"]
+      rss <- sum((df$value - df$fitted)^2) # Residual sum of squares
+      tss <- sum((df$value - mean(df$value))^2) # Total sum of squares
+      df$Rsqr <- 1-rss/tss # R squared
+    }
+  return(df)
+  
+  }
+  stopImplicitCluster()
+  stopCluster(cluster)
+  time4 <- Sys.time()
+  print(time4-time3)
+  
+df_para <- df1 %>% dplyr::select(model, R, Y, target, revenue, a, b) %>% mutate(type = sw_fun) %>% distinct()
+
+save(df_para, df0, df1, file = paste0(dir_output_YSSPpaper, "/RData/5_7_EneExpShare_para.RData"))
+
+
+pdata <- df1 %>% dplyr::select(-"scenario") %>% left_join(df_FPL_wd) %>% filter(!is.na(category))
+p <- ggplot() +
+  geom_point(data = pdata, aes(x = fitted, y = value, color = R_CGE, shape = gini)) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey") +
+  ggthemes::theme_few() + facet_wrap(~category, scales = "free") 
+p
+
+
+pdata <- df1 %>% pivot_longer(cols = c(value, fitted), names_to = "type", values_to = "value") %>% dplyr::select(-"scenario") %>% left_join(df_FPL_wd) %>% filter(!is.na(category))
+p <- ggplot() +
+  geom_point(data = pdata, aes(x = budget, y = value, color = type, shape = gini)) +
+  ggthemes::theme_few() + facet_wrap(~category, scales = "free") 
+p
+
+p <- ggplot() +
+  geom_boxplot(data = pdata, aes(x = category, y = Rsqr), outliers = FALSE) +
+  ggthemes::theme_few() + facet_wrap(~target)
+p
+
+
+```
+# Calculating the LIHC poverty rate
+Having the income thresholds for energy poverty related indicators, we can calculate the rate and population of energy poverty in different countries and years.  
+```{r}
+# load the income distribution parameters
+for(m in seq_along(lis_model)){
+  # m <- 1
+  if(lis_model[m] == "AIM-Hub"){
+      gdx_in <- AnaExp
+    }else if(lis_model[m] == "MESSAGEix"){
+      gdx_in <- AnaExpmsg
+    }  
+  
+  df_result0 <- df_result %>% filter(model == lis_model[m])
+  
+  df_mu <- rgdx.param(gdx_in, "Mu_exp")
+  
+  df_sigma <- rgdx.param(gdx_in, "Sigma_exp")
+
+  df_result1 <- df_mu %>% left_join(df_sigma) %>% F_reve_mutate() %>% full_join(df_result0 %>% dplyr::select(-a, -b)) %>% mutate(rate)
+}
+
+
+
+```
+
+# Calculate the energy poverty indexes
+## Income threshold for Low-income-high-consumption indicator based on the concrete model
+```{r inc-LIHC}
+# define the function
+
+F_eq_LIHC <- function(x, a, b){
+  return(x*(1-b-a/( 1+log(x+1) ) ))
+}
+# val_target <- 2.15*365
+
+result <- sapply(1:nrow(df_para), function(i){
+  # extract parameters
+  a <- df_para[i, "a"]
+  b <- df_para[i, "b"]
+  
+  # define the target value to solve f(x) = val_target (thousand dollors), here it is the annual income at thousand dollors
+  val_target <- 0.785
+  # solve the equation
+  result <- uniroot(function(x) F_eq_LIHC(x, a, b) - val_target, c(0, 100))
+  return(result$root)
+})
+
+df_result <- df_para
+df_result$est_x <- result
+df_result <- df_result %>% mutate(est_y = b+a/( 1+log(est_x+1) ))
+```
+
+# LIHC index
+## Calculating the income threshold for Low-income-high-consumption indicator based on discrete segment level
+```{r discrete-LIHC}
+# loading the discrete segment level data
+
+lis_y <- c(seq(2020, 2070, 10))
+# lis_ref_loop <- lis_Ref
+lis_R_loop <- unique(df_ExpShare_ene$R)
+df_enepov_out <- data.frame()
+df_enepov_out1 <- data.frame()
+
+# apply the function
+for(m in seq_along(lis_model)){
+  # m <- 1
+  if(lis_model[m] == "AIM-Hub"){
+      gdx_in <- demandcge
+    }else if(lis_model[m] == "MESSAGEix"){
+      gdx_in <- demandmsg
+    }  
+  
+  Seg_pop0 <- rgdx.param(gdx_in, "FreqSegall") %>%
+    rename.vars(from = colnames(.), to = c("R", 'Ref','Y','Seg','pop')) %>%
+    filter(Y %in% lis_y) %>%
+    group_by(R,Ref,Y) %>%
+    dplyr::reframe(pop = pop, Seg = Seg) %>% 
+    SegNum()
+
+  ExpNational_tmp0 <- rgdx.param(gdx_in, "ExpNational") %>%
+    rename.vars(from = colnames(.), to = c("R", 'Ref','Seg','Y',"I",'ExpNational')) %>%
+    filter( #Ref %in% lis_ref_loop,
+            Y %in% lis_y,
+    ) %>%
+    dplyr::group_by(R, Ref, Seg, Y) %>%
+    dplyr::mutate(share = ExpNational/sum(ExpNational)) %>%
+    ungroup() %>%
+    filter(I %in% lis_Iene)
+  
+  # run the loop for each country in parallel
+  time3 <- Sys.time()
+  cluster <- makeCluster(10)
+  registerDoParallel(cluster)
+  df_enepov_out1 <- foreach(r = 1:length(lis_R_loop),.combine=rbind, .packages = c('tidyverse')) %dopar% {
+    # r <- 1
+    Seg_pop <- Seg_pop0 %>% filter(R %in% lis_R_loop[r])
+    ExpNational_tmp <- ExpNational_tmp0 %>% filter(R %in% lis_R_loop[r])
+    
+    F_EnePov(Seg_pop, ExpNational_tmp, PVL = 2.15,lis_ref = lis_Ref,lis_y = c(2020, 2030, 2050, 2070),lis_Iene = c("Energy"), median = F)
+  
+  } # END of the loop for each country
+  stopImplicitCluster()
+  stopCluster(cluster)
+  time4 <- Sys.time()
+  print(time4-time3)
+  
+  df_enepov_out <- df_enepov_out %>% rbind(df_enepov_out1 %>% mutate(model = lis_model[m]))
+
+} # END of the loop for each model
+
+# see the regions and models
+unique(df_enepov_out$R) %>% length()
+unique(df_enepov_out$Ref)
+unique(df_enepov_out$model)
+
+df_enepov <- df_enepov_out %>% mutate_at(vars(`TwoM`:`LIHC`), ~replace(., is.na(.), 0)) %>% left_join(df_pop) %>% mutate(HEP_pop = HEP*Pop, LIHC_pop = LIHC*Pop) %>% filter(R != "WLD") %>% F_reve_mutate() %>% left_join(df_FPL_wd) %>% filter(!is.na(category)) 
+
+```
+
+```{r plot}
+
+# plot the results
+pdata <- df_enepov %>% dplyr::group_by(target, gini, revenue, model,  Y) %>% reframe(HEP_pop = sum(HEP_pop), LIHC_pop = sum(LIHC_pop)) %>% filter(gini == "consistent", target %in% c("No-Miti", "1.5C")) 
+
+p <- ggplot(pdata %>% filter(revenue == "Neutral")  %>% pivot_longer(cols = c("HEP_pop","LIHC_pop"), names_to = "Type", values_to = "value")) + 
+  geom_col(aes(x = Y, y = value/1000000, fill = target),
+           position = "dodge") + 
+  # geom_line() + 
+  ggthemes::theme_pander() + 
+  theme(legend.position = "right") + 
+  labs(x = "Year", y = "Low-income-high-consumption (million)") + 
+  facet_wrap(Type~model)
+p
+```
+
+```{r plot-LIHC}
+df_LIHC <- df_enepov %>% left_join(Map_r_PHI2Hub) %>% dplyr::group_by(R_CGE, target, gini, revenue, model,  Y) %>% reframe(value = sum(LIHC_pop)) %>% F_R_CGEfull() %>% dplyr::rename(R = R_CGE) 
+
+# regional LIHC
+pdata <- df_LIHC %>% filter(target %in% c("No-Miti", "1.5C", "2C")) %>% F_change() %>% filter(gini == "consistent", Y %in% c("2030", "2040", "2050", "2070"), target == "1.5C") %>% mutate(revenue = factor(revenue, levels = c("Neutral", "EPC")))
+
+p <- ggplot() + 
+  geom_col(pdata, mapping = aes(x = Y, y = change/1000000, fill = R),
+           position = "stack", width = .7) + 
+  geom_abline(slope = 0, intercept = 0, color = "grey") +
+  MyTheme + 
+  theme(legend.position = "right") + 
+  labs(x = "Year", y = "LIHC (million)", fill = "Model") + 
+  scale_fill_manual(values = palette_R_CGE) +
+  facet_grid(model~revenue)
+p
+ggsave(p, file = paste0(dir_output_YSSPpaper, "/fig/5_7_LIHC_region.pdf"), width = 15, height = 12, units= "cm")
+
+
+# Global LIHC
+pdata <- df_LIHC %>% filter(target %in% c("No-Miti", "1.5C", "2C")) %>% dplyr::group_by(target, gini, revenue, model,  Y) %>% reframe(value = sum(value)) %>% mutate(R = "WLD") %>% F_change() %>% filter(gini == "consistent", Y %in% c("2030", "2040", "2050", "2070"), target == "1.5C") %>% mutate(revenue = factor(revenue, levels = c("Neutral", "EPC")))
+
+p <- ggplot() + 
+  geom_col(pdata, mapping = aes(x = Y, y = change/1000000, fill = model),
+           position = "dodge", width = .7) + 
+  geom_abline(slope = 0, intercept = 0, color = "grey") +
+  MyTheme + 
+  theme(legend.position = "right") + 
+  labs(x = "Year", y = "LIHC (million)", fill = "Model") + 
+  scale_fill_manual(values = palette_model) +
+  facet_grid(~revenue)
+p
+ggsave(p, file = paste0(dir_output_YSSPpaper, "/fig/5_7_LIHC_global.pdf"), width = 13, height = 7, units= "cm")
+```
+
+
+# Additional optimization
+
+The analysis below is to fit the distribution to the data using more complicated/customized functions.   
+It is commented out because it is not necessary for the current analysis.
+```{r other-roptimization}
+# # functional form ----------------------------------------------
+# # Fit lognormal distribution to the 'value' column
+# F_lnorm <- function(x, para = c(a1, a2)){
+#   sigma <- para[1]
+#   mu <- para[2]
+#   
+#   # project y
+#   y <- 1/(x*sigma*(2*pi)^0.5) * exp(-0.5*((log(x)-mu)/sigma)^2)
+#   return(y)
+# }
+# 
+# # beta distribution
+# F_beta <- function(x, para = c(a1, a2)){
+#   a1 <- para[1]
+#   a2 <- para[2]
+#   
+#   # project y
+#   y <- (x^(a1-1) * (1-x)^(a2-1))/beta(a1, a2)
+#   return(y)
+# }
+# 
+# # gamma distribution
+# F_gamma <- function(x, para = c(a1, a2)){
+#   a1 <- para[1]
+#   a2 <- para[2]
+#   
+#   # project y
+#   y <- (x^(a1-1) * exp(-x/a2))/(gamma(a1)*a2^a1)
+#   return(y)
+# }
+# 
+# 
+# # log likelihood function ----------------------------------------------
+# F_logll_lnorm <- function(para){
+#   df1 <- df_in %>% 
+#     # distinct() %>% # "Solid", "Liquid", "Gas", "Electricity", "Bio_liq", "Bio_pri"
+#     mutate(est = F_lnorm(x, para),
+#            xlogP = log(est)*x)
+#   
+#   LL <- sum(df1$xlogP, na.rm = TRUE)
+#   
+#   return(LL)
+# }
+# 
+# head(df0)
+# 
+# df_in <- df0 %>% dplyr::rename(x = budget, y = value) %>% dplyr::select(-I_abb, -revenue, -target) %>% filter(R == "CHN", model == "AIM-Hub", scenario == "No-Miti_Neutral")
+# 
+# para <- numeric(2)
+# para <- c(5, 6)
+# para <- c(1, 10.8)
+#   df1 <- df_in %>% 
+#     mutate(est = F_lnorm(x, para),
+#            xlogP = log(est)*x)
+# 
+#   res <- optim(para, F_logll_lnorm, # lower = c(rep(-Inf, 6), rep(0,3)), upper = c(rep(0, 6), rep(Inf,3)), 
+#              method = "Nelder-Mead",
+#              hessian = FALSE, control = list(maxit = 600, fnscale = -1)) 
+# # By default optim performs minimization, but it will maximize if control$fnscale is negative.
+# 
+# print(res)
+# 
+# 
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

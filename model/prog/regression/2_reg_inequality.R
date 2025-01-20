@@ -1,20 +1,12 @@
 # This Rscript calculates the response of inequality index to policy stringency
 # Shiya ZHAO, 2024.01.28
 
-## 00 redistribution ---------
-type_redist <- "Neutral"
-# type_redist <- "Progressive"
-
-## 00 regression ---------
-# type_reg <-  "PGHG"
-type_reg <-  "EGHG_Rcge"
-
 
 
 
 # 0. Function -------------------------------------------------------------
-F_plot_EGHG_Gini <- function(pdata, x_label = expression(paste(CO[2]," reduction rate | %")) , 
-                        y_label = "Change in Gini | % point"){
+F_plot_EGHG_Gini <- function(pdata, x_label = expression(paste(CO[2]," reduction rate (%)")) , 
+                        y_label = "Change in Gini (point)"){
   
   plot <- ggplot(pdata) +
     geom_point(aes(x = -x_value, y = y_value, color = variable_color, shape = variable_shape)) +
@@ -22,7 +14,7 @@ F_plot_EGHG_Gini <- function(pdata, x_label = expression(paste(CO[2]," reduction
                 color = "grey50", alpha = 0.5, linewidth = 0.2,method = 'lm', formula = 'y ~ x') +
     geom_hline(yintercept = 0, color = "grey") +
     labs(x = x_label, y = y_label) +
-    guides(color = guide_legend(title = paste(expression("Carbon Budget | Gt ", CO[2])), ncol = 1)) +
+    guides(color = guide_legend(title = expression(paste("Carbon Budget (Gt ", CO[2], ")")), ncol = 1)) +
     scale_color_manual(values = viridis(12)) +
     MyTheme
   plot
@@ -49,8 +41,8 @@ if(type_reg == "PGHG"){
   # Regression: PGHG v.s. additional poverty headcount -------------------
   df <- df_PGHG_Rcge %>% left_join(df_Gini_R) %>% #view
     filter(!is.na(value_Gini)) %>% F_scenario_rename() %>% F_scenario() %>% 
-    F_reve_mutate() %>% 
-    filter(abs(change_Gini) > 10^(-4)) %>% F_CarbonB_factor()
+    F_reve_mutate(all = T) %>% 
+    filter(abs(change_Gini) > 10^(-5)) %>% F_CarbonB_factor()
   x <-"value_PGHG"
   y <- "change_Gini"
   
@@ -59,23 +51,23 @@ if(type_reg == "PGHG"){
   # regression: Emissions v.s. additional poverty headcount ----
   df <- df_EGHG_Rcge %>% filter(Species == "CO2", Source == "tot_anthr") %>% left_join(df_Gini_R) %>% #view
     filter(!is.na(value_Gini)) %>% F_scenario_rename() %>% F_scenario() %>% 
-    F_reve_mutate() %>% 
-    filter(abs(change_Gini) > 10^(-4)) %>% F_CarbonB_factor()
+    F_reve_mutate(all = T) %>% 
+    filter(abs(change_Gini) > 10^(-5)) %>% F_CarbonB_factor()
   x <- "change_rate_EGHG_Rcge"
   y <- "change_Gini"
   
 }else if(type_reg == "EGHG_R"){
   df <- df_EGHG_R %>% filter(Source == "tot_anthr") %>% left_join(df_PoV_R) %>%
     filter(!is.na(value_PoVExp)) %>% F_scenario_rename() %>% F_scenario() %>%
-    F_reve_mutate()  %>% F_CarbonB_factor()
+    F_reve_mutate(all = T)  %>% F_CarbonB_factor()
   x <- "EGHG_reduction_rate"
-  y <- "change_PoVExp"
+  y <- "change_Gini"
 }
 
 # Gini to PGHG
 colnames(df)
 df_plot <- df %>%
-  mutate(x_value = .[[x]]*100 , y_value = .[[y]]*100) %>% filter(!(scenario_Name %in% c("400", "1600"))) 
+  mutate(x_value = .[[x]]*100 , y_value = .[[y]]*100) %>% filter(!(target %in% c("400", "1600"))) 
 
 
 
@@ -83,7 +75,7 @@ df_plot <- df %>%
 # national 
 pdata <- df_plot %>% 
   filter(Y %in% c(2030), revenue == type_redist) %>% 
-  mutate(variable_color = scenario_Name, variable_shape = policy)
+  mutate(variable_color = target, variable_shape = policy)
 
 # plot regression 2030
 # carbon price in "SSP2_500_FC", "SSP2_600_FC" are the same in 2030 but differ afterwards
@@ -92,17 +84,17 @@ rm(p)
 p <- F_plot_EGHG_Gini(pdata) + facet_wrap(~R_CGE, ncol = 6) + guides(shape = guide_legend(title = "Policy"))
 p
 
-ggsave(filename = paste0(dir_out, "/fig/SI/regression/2_Gini_PGHG_2030_national_",type_redist,".png"), 
+ggsave(filename = paste0(dir_output_YSSPpaper, "/fig/SI/regression/2_Gini_PGHG_2030_national_",type_redist,".png"), 
        width = 32, height = 16, units = "cm")
 
 
 # regional 
 pdata <- df_plot %>% 
-  dplyr::group_by(Ref, R_CGE, Y, Species, Source, policy, revenue, scenario_Name, scenario) %>% 
+  dplyr::group_by(Ref, R_CGE, Y, Species, Source, policy, revenue, target, scenario) %>% 
   dplyr::reframe(x_value = (sum(value_EGHG)-sum(value_EGHG_BaU))/sum(value_EGHG_BaU), 
                  y_value = mean(change_Gini)) %>% 
   filter(Y %in% c(2030), revenue == type_redist) %>% 
-  mutate(variable_color = scenario_Name, variable_shape = policy)
+  mutate(variable_color = target, variable_shape = policy)
 
 # plot regression 2030
 # carbon price in "SSP2_500_FC", "SSP2_600_FC" are the same in 2030 but differ afterwards
@@ -111,7 +103,8 @@ pdata <- df_plot %>%
 p <- F_plot_EGHG_Gini(pdata) + facet_wrap(~R_CGE, ncol = 6) + guides(shape = guide_legend(title = "Policy"))
 p
 
-ggsave(filename = paste0(dir_out, "/fig/SI/regression/2_Gini_PGHG_2030_regional_",type_redist,".png"), 
+
+ggsave(filename = paste0(dir_output_YSSPpaper, "/fig/SI/regression/2_Gini_PGHG_2030_regional_",type_redist,".png"), 
        width = 32, height = 16, units = "cm")
 rm(p)
 
@@ -123,18 +116,18 @@ lis_pol <- c("Carbon tax","Full Combo")
 for(pol in 1:length(lis_pol)){
  # national
  pdata <- df_plot %>% filter(Y %in% c(2030, 2050, 2070), revenue == type_redist, abs(y_value) > 0.0001, policy == lis_pol[pol]) %>% 
-  mutate(variable_color = scenario_Name, variable_shape = Y)
+  mutate(variable_color = target, variable_shape = Y)
 
   # plot regression 2.15-threshold
   # carbon price in "SSP2_500_FC", "SSP2_600_FC" are the same in 2030 but differ afterwards
   # The outlier in the plot is SSP2_400_FC
   
-  p <- F_plot_EGHG_Gini(pdata) + facet_wrap(~R_CGE, ncol = 6) + labs(subtilte = lis_pol[pol]) + guides(shape = guide_legend(title = "Policy"))
+  p <- F_plot_EGHG_Gini(pdata) + facet_wrap(~R_CGE, ncol = 6) + labs(subtilte = lis_pol[pol], shape = "Year") + guides(shape = guide_legend(title = "Year"))
   p
   
   # slopes are different across years
   
-  ggsave(filename = paste0(dir_out, "/fig/SI/regression/2_Gini_PGHG_Year_national_",type_redist,"_",lis_pol[pol],".png"), 
+  ggsave(filename = paste0(dir_output_YSSPpaper, "/fig/SI/regression/2_Gini_PGHG_Year_national_",type_redist,"_",lis_pol[pol],".png"), 
          width = 32, height = 16, units = "cm")
   
   
@@ -142,22 +135,22 @@ for(pol in 1:length(lis_pol)){
   
   # regional. 
   pdata <- df_plot %>%   
-    dplyr::group_by(Ref, R_CGE, Y, Species, Source, policy, revenue, scenario_Name, scenario) %>% 
+    dplyr::group_by(Ref, R_CGE, Y, Species, Source, policy, revenue, target, scenario) %>% 
     dplyr::reframe(x_value = (sum(value_EGHG)-sum(value_EGHG_BaU))/sum(value_EGHG_BaU), 
                    y_value = mean(change_Gini)) %>% 
     filter(Y %in% c(2030, 2050, 2070), revenue == type_redist, abs(y_value) > 0.0001, policy == lis_pol[pol]) %>% 
-    mutate(variable_color = scenario_Name, variable_shape = Y)
+    mutate(variable_color = target, variable_shape = Y)
   
   # plot regression 2.15-threshold
   # carbon price in "SSP2_500_FC", "SSP2_600_FC" are the same in 2030 but differ afterwards
   # The outlier in the plot is SSP2_400_FC
   
-  p <- F_plot_EGHG_Gini(pdata) + facet_wrap(~R_CGE, ncol = 6) + labs(subtilte = lis_pol[pol]) + guides(shape = guide_legend(title = "Policy"))
+  p <- F_plot_EGHG_Gini(pdata) + facet_wrap(~R_CGE, ncol = 6) + labs(subtilte = lis_pol[pol]) + guides(shape = guide_legend(title = "Year"))
   p
   
   # slopes are different across years
   
-  ggsave(filename = paste0(dir_out, "/fig/SI/regression/2_Gini_PGHG_Year_regional_",type_redist,"_",lis_pol[pol],".png"), 
+  ggsave(filename = paste0(dir_output_YSSPpaper, "/fig/SI/regression/2_Gini_PGHG_Year_regional_",type_redist,"_",lis_pol[pol],".png"), 
          width = 32, height = 16, units = "cm")
 }
 
@@ -214,6 +207,7 @@ df_smry_output <- data.frame()
 df_smry <- df_smry %>% mutate(intercept = case_when(abs(intercept) < 0.0001 ~ 0, abs(intercept) > 0.0001 ~ intercept), 
                    slope_PGHG = case_when(abs(slope_PGHG) < 0.0001 ~ 0, abs(slope_PGHG) > 0.0001 ~ slope_PGHG), 
                    p_Full_Combo = case_when(abs(p_Full_Combo) < 0.0001 ~ 0, abs(p_Full_Combo) > 0.0001 ~ p_Full_Combo), 
-                   r_sqr = case_when(abs(r_sqr) < 0.0001 ~ 0, abs(r_sqr) > 0.0001 ~ r_sqr)) %>% openxlsx::write.xlsx(file = paste0(dir_out, "/csv/regression/2_Gini_PGHG_",type_reg, "_",type_redist,"_summary.xlsx"))
+                   r_sqr = case_when(abs(r_sqr) < 0.0001 ~ 0, abs(r_sqr) > 0.0001 ~ r_sqr)) 
+openxlsx::write.xlsx(df_smry, file = paste0(dir_output_YSSPpaper, "/csv/regression/2_Gini_PGHG_",type_reg, "_",type_redist,"_summary.xlsx"))
 
 

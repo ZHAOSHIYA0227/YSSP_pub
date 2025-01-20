@@ -1,0 +1,127 @@
+---
+title: "Food expenditure share calculation and comparison with FAO estimates"
+author: "Shiya ZHAO"
+date: "First made: 2024/12/13 </br> Last update: `r format(Sys.Date(), '%Y/%m/%d')`"
+output: 
+  html_document:
+    theme: lumen
+    number_sections: false
+    highlight: tango
+    df_print: paged
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "~/Desktop/Model/AIMPHI/YSSP_AIMPHI/exe")
+
+require(tidyverse) 
+require(ggplot2)  %>%
+  suppressWarnings()
+require(knitr)
+require(ggthemes)
+```
+
+
+```{r}
+
+source(paste0(dir_ModelComparison, "/inc_prog/0_Directories.R"))
+source(paste0(dir_ModelComparison, "/inc_prog/0_PlotSettings.R"))
+source(paste0(dir_ModelComparison, "/inc_prog/igdx_GAMS_PATH.R"))
+source(paste0(dir_ModelComparison, "/inc_prog/0_Maps_global.R"))
+```
+
+## R Markdown
+
+This is for comparing the food expenditure share computed in AIM-PHI with the proportion estimated by the World Bank.  
+This markdown document is called by prog/cp5_Expenditure.R, where the expenditure share of commodities by deciles are loaded as df_ExpShare.     
+
+The World Bank estimated "The percentages (63%, 56%, and 46%) represent the average food expenditure shares in the second quintile of consumers in low-income, lower-middle-income countries, and the first quintile of consumers in upper-middle-and-high-income countries, according to household surveys compiled by the World Bank. Countries' income classifications follow the calendar year of 2021 standard (fiscal year of 2023 of the World Bank), which is the base year of the latest ICP cycle. Data available for 2021." This can be found in the description for affordability of a [energy sufficient/nutrient adequate/health diet] in https://databank.worldbank.org/source/food-prices-for-nutrition# and maybe also *Herforth, A., Venkat, A., Bai, Y., Costlow, L., Holleman, C. & Masters, W.A. 2022. Methods and options to monitor globally the cost and affordability of a healthy diet. Background paper for The State of Food Security and Nutrition in the World 2022. Rome, FAO*.   
+
+```{r 1-country-list, echo=FALSE}
+  df_FPL_wd <- readxl::read_excel(paste0(dir_ModelComparison, "/data/WorldBank/OGHIST.xlsx"), sheet = "Country Analytical History")
+  colnames(df_FPL_wd) <- df_FPL_wd[4,]
+  colnames(df_FPL_wd)[1] <- "R"
+  df_FPL_wd <- df_FPL_wd %>% select(R, FY21)
+  df_FPL_wd <- df_FPL_wd[-1:-10,]
+  
+  df_FPL_wd <- df_FPL_wd %>% mutate(adjust = case_when(FY21 == "L" ~ .63, FY21 == "LM" ~ .56, FY21 == "UM" ~ .46, FY21 == "H" ~ .46)) %>% dplyr::rename(category = FY21) %>% filter(!is.na(R))
+  head(df_FPL_wd)
+```
+# 1. Comparison with World Bank estimation for target population 
+
+```{r 2-plot-food-expenditure-share}
+
+df_ExpShare_base <- df_ExpShare %>% filter(Y %in% c("2010", "2020"), target == "No-Miti", gini == "consistent", model == "AIM-Hub", I_abb == "Food&Beverages") %>% select(-scenario, -gini, -target, -revenue, -model) %>% left_join(df_FPL_wd)
+
+colnames(df_ExpShare)
+pdata <- df_ExpShare_base %>% left_join(df_FPL_wd)
+colnames(pdata)
+
+
+p <- ggplot()+
+  geom_boxplot(pdata %>% filter(Y == "2020"), mapping = aes(x = DEC, y = value))+
+  geom_hline(pdata %>% select(category, adjust) %>% distinct(), mapping = aes(yintercept = adjust))+
+  facet_grid(~category) +
+  ggthemes::theme_pander()
+
+p
+rm(pdata)
+```
+
+# Comparison with HBS input in AIM-PHI
+
+Loading the HBS inputs.  
+
+```{r HBS-inputs, echo=FALSE}
+gdx_expdata <- paste0("../", prog_loc, "/data/ExpData.gdx")
+
+df_AUS <- rgdx.param(gdx_expdata, "CNSAUS") %>% dplyr::rename(value = CNSAUS) %>% mutate(dataset = "AUS_HES")
+
+lis_I <- unique(df_AUS$I)
+df_CHN <- rgdx.param(gdx_expdata, "CNSCHN") %>% dplyr::rename(value = CNSCHN, I = Iall) %>% mutate(dataset = "CFPS") %>% filter(I %in% lis_I)
+rm(lis_I)
+
+
+df_USA <- rgdx.param(gdx_expdata, "CNSUSA") %>% dplyr::rename(value = CNSUSA) %>% mutate(dataset = "CEX")
+
+df_JPN <- rgdx.param(gdx_expdata, "CNSJPN") %>% dplyr::rename(value = CNSJPN) %>% mutate(dataset = "NSFIE")
+
+df_GCD <- rgdx.param(gdx_expdata, "ConsumptionSector") %>% dplyr::rename(value = ConsumptionSector) %>% mutate(dataset = "GCD", Seg = paste0(ConsumptionSegment, Area), Y = "2010") %>% select(-ConsumptionSegment, -Area)
+
+df_EUROSTAT <- rgdx.param(gdx_expdata, "EUROSTATI") %>% dplyr::rename(value = EUROSTATI, Seg = quantile) %>% mutate(dataset = "EUROSTAT")
+
+
+df_ExpData <- df_AUS %>% rbind(df_CHN) %>% rbind(df_JPN) %>% rbind(df_USA) %>% rbind(df_GCD) %>% rbind(df_EUROSTAT) %>% dplyr::group_by(Seg, R, Y, dataset) %>% reframe(I = I, share = value/sum(value)) %>% left_join(df_FPL_wd)
+colnames(df_ExpData)
+rm(df_AUS, df_CHN, df_JPN, df_USA, df_GCD, df_EUROSTAT)
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r Comparison-input-output}
+pdata1 <- df_ExpShare_base %>% left_join(df_FPL_wd)
+
+pdata2 <- df_ExpData %>% filter(I == "Food and nonalcoholic beverages")
+
+p <- ggplot()+
+  geom_boxplot(pdata2, mapping = aes(x = Seg, y = share))+
+  geom_hline(df_FPL_wd %>% select(category, adjust) %>% distinct() %>% filter(!is.na(category)), mapping = aes(yintercept = adjust))+
+  facet_wrap(~category, ncol = 1) +labs(title = "All input food expenditure share") +
+  ggthemes::theme_pander()+ theme(axis.text.x = element_text(angle = 90))
+
+p
+
+p <- ggplot()+
+  geom_boxplot(pdata2 %>% filter(dataset == "GCD"), mapping = aes(x = Seg, y = share))+
+  geom_hline(df_FPL_wd %>% select(category, adjust) %>% distinct() %>% filter(!is.na(category)), mapping = aes(yintercept = adjust))+
+  facet_wrap(~category, ncol = 2) + labs(title = "GCD input food expenditure share") +
+  ggthemes::theme_pander() + theme(axis.text.x = element_text(angle = 90))
+
+p
+
+
+```
+

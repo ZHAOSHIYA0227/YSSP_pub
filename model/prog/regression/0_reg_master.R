@@ -5,13 +5,25 @@ require(viridisLite)
 require(tidyverse)
 require(gamstransfer)
 
-getwd()
-txt_TH <- "pop_1.9"
+# args <- commandArgs()
+# print(as.character(args))
+# prog_loc <- as.character(args[length(args)])
+# setwd("E:/szhao/model/YSSP_MESSAGE_PHI/AIMPHI_YSSP/exe")
+setwd("/Users/shiyazhao/Desktop/Model/AIMPHI/YSSP_AIMPHI/exe")
+
+prog_loc <- "model"
+
+source(paste0("../",prog_loc, "/inc_prog/igdx_GAMS_PATH.r"))
+print(args)
+print(prog_loc)
+
+
+txt_TH <- "pop_2.15"
 
 # 0. Define function, list ------------------------------------------------
 # directory
-dir.create(paste0(dir_out, "/SI/"))
-dir.create(paste0(dir_output, "/csv/regression"))
+dir.create(paste0(dir_output_YSSPpaper, "/fig/SI/regression/"))
+dir.create(paste0(dir_output_YSSPpaper, "/csv/regression"))
 
 # Function
 F_scenario <- function(x){
@@ -31,7 +43,7 @@ F_scenario_rename <- function(x){
 }
 
 F_CarbonB_factor <- function(x){
-  y <- x %>% mutate(scenario_Name = factor(scenario_Name, levels = seq(400, 1500, 100) %>% as.character()))
+  y <- x %>% mutate(target = factor(target, levels = seq(400, 1500, 100) %>% as.character()))
   return(y)
   
 }
@@ -63,9 +75,9 @@ lis_R_CGE_PoV <- c("Sub-Saharan Africa", "India", "Rest of Asia","Southeast Asia
 
 
 # 0. load data ------------------------------------------------------------
-dir_AnalysisExpenditure <- "../../output/gdx/ConsumptionResults_reg/AnalysisExpenditure_AIMHub_cluster.gdx"
-dir_PHIinput <- paste0("../../data/PHIinputdata/AIMHub.gdx")
-dir_EDS <- paste0("../../data/Emission_DS/AIMHub.gdx")
+dir_AnalysisExpenditure <- "../output/gdx/ConsumptionResults_reg/AnalysisExpenditure_AIMHub.gdx"
+dir_PHIinput <- paste0("../",prog_loc,"/data/PHIinputdata/AIMHub.gdx")
+dir_EDS <- paste0("../",prog_loc,"/data/Emission_DS/AIMHub.gdx")
 
 # data from AIM/PHI output
 m_input <- Container$new(dir_AnalysisExpenditure)
@@ -99,7 +111,7 @@ df_PoV_Rcge <- df_PoV_R %>%
 
 # identify countries left out from the computation
 a <- df_Gini_R %>% select("Ref","R","Y") %>% filter(Y == 2030) %>% distinct() %>% pivot_wider(names_from = "Ref", values_from = "Y") %>% filter(is.na(`SSP2_1100`))
-a$R %>% openxlsx::write.xlsx(file = paste0("..//prog/regression/1_R_regression.xlsx"))
+a$R %>% openxlsx::write.xlsx(file = paste0(dir_ModelComparison, "/prog/regression/1_R_regression.xlsx"))
   
 
 df_PoVGap_abs <- m_input['PoVgap_absExp']$records %>% gdata::rename.vars(colnames(.), c("Ref","R","Y", "TH","value_PoVGap_abs")) %>% 
@@ -144,7 +156,37 @@ df_EGHG_Rcge <- df_EGHG_Rcge1 %>%
   mutate(change_EGHG_Rcge = value_EGHG - value_EGHG_BaU, change_rate_EGHG_Rcge = change_EGHG_Rcge/value_EGHG_BaU)
 rm(df_EGHG_Rcge1,a, df_Gini)
 
-dir.create('../../output/paper/csv/regression')
-source(paste0("..//prog/regression/1_reg_poverty.R"))
 
-source(paste0("..//prog/regression/2_reg_inequality.R"))
+## 00 redistribution ---------
+type_redist <- "Neutral"
+# type_redist <- "EPC"
+
+lis_redist <- c("Neutral", "EPC")
+
+## 00 regression ---------
+# type_reg <-  "PGHG"
+type_reg <-  "EGHG_Rcge"
+
+df_smry_tot_pov <- data.frame()
+df_smry_tot_gini <- data.frame()
+for(redist in seq_along(lis_redist)){
+  # poverty
+  type_redist <- lis_redist[redist]
+  
+  source(paste0(dir_ModelComparison, "/prog/regression/1_reg_poverty.R"))
+  
+  df_smry_tot_pov <- df_smry_tot_pov %>% rbind(df_smry %>% mutate(revenue = type_redist))
+  rm(df_smry)
+  print("1")
+  
+  
+  # inequality
+  source(paste0(dir_ModelComparison, "/prog/regression/2_reg_inequality.R"))
+  
+  df_smry_tot_gini <- df_smry_tot_gini %>% rbind(df_smry %>% mutate(revenue = type_redist))
+  rm(df_smry)
+  print("2")
+  
+}
+
+save(df_smry_tot_pov, df_smry_tot_gini, file = paste0(dir_output_YSSPpaper, "/RData/reg_summary.RData"))

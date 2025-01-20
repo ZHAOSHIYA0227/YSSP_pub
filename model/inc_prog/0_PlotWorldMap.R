@@ -13,7 +13,7 @@ library(ggplot2)
 
 
 
-F_plot_globalMap <- function(data=pdata, lis_plot_y="2030", lis_plot_scenario = c("1.5D"), by = c("R_CGE"),
+F_plot_globalMap <- function(data=pdata, lis_plot_y="2030", lis_plot_scenario = c("1.5C"), by = c("R_CGE"),
                              legendName = "log(PovertyHeadcount) \n Headcount: million "){
   
   # df_world_map_tmp <- ggplot2::map_data("world") %>% 
@@ -44,7 +44,7 @@ F_plot_globalMap <- function(data=pdata, lis_plot_y="2030", lis_plot_scenario = 
   ####
 
   
-  outline <- st_read(paste0("../../inc_data/chinasheng_world/country1.shp")) 
+  outline <- st_read(paste0(dir_ModelComparison, "inc_data/chinasheng_world/country1.shp")) 
   df_world_map_tmp <- outline %>% 
     mutate(R = case_when(GMI_CNTRY == "MON" ~ "MNE",
                          GMI_CNTRY == "ROM" ~ "ROU",
@@ -55,13 +55,12 @@ F_plot_globalMap <- function(data=pdata, lis_plot_y="2030", lis_plot_scenario = 
     select("R", "GMI_CNTRY", "SOVEREIGN", "geometry") %>% 
     left_join(Map_r_PHI2Hub) %>% 
     mutate(R_CGE = case_when(is.na(R_CGE) ~ "none", !is.na(R_CGE) ~ R_CGE)) %>%
-    # filter(is.na(R_CGE)) %>% 
-    # filter(SOVEREIGN == "Zaire")
     full_join(data, by = by, relationship = "many-to-many") 
+  
   
     pdata_map <- df_world_map %>%
       filter(R != "WLD") %>% 
-      filter(Y %in% lis_plot_y) 
+      filter(Y %in% lis_plot_y)
     
     lis_plot_model <- unique(data$model) %>% as.character()
     
@@ -83,12 +82,13 @@ F_plot_globalMap <- function(data=pdata, lis_plot_y="2030", lis_plot_scenario = 
 
     }
      
+    colnames(pdata_map)
+    colnames(pdata_map_tmp)
     pdata_map <- pdata_map %>% 
       rbind(pdata_map_tmp)
     p1 <- ggplot() + 
       geom_sf(data = pdata_map, mapping = aes(fill = value_plot), color = "grey50",  
               size = 0.1) +
-      # ggthemes::theme_map() +
       MyTheme +
       theme(axis.title.x = element_blank(),
             axis.ticks.x = element_blank(), 
@@ -106,4 +106,5 @@ F_plot_globalMap <- function(data=pdata, lis_plot_y="2030", lis_plot_scenario = 
   
   return(p1)
 }
+
 
